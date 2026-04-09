@@ -5,11 +5,12 @@ import os
 st.set_page_config(layout="wide")
 
 st.title("🚀 CX Health Command Center")
+st.caption("Customer Success Intelligence Platform")
 
 uploaded_file = st.file_uploader("Upload your client CSV", type=["csv"])
 
 # --------------------------
-# 📂 Load existing actions
+# 📂 Load actions
 # --------------------------
 if os.path.exists("actions.csv"):
     actions_df = pd.read_csv("actions.csv")
@@ -17,26 +18,24 @@ else:
     actions_df = pd.DataFrame(columns=["client_name", "user", "owner", "status", "notes"])
 
 # --------------------------
-# 👤 USER SELECTION
+# 👤 USER
 # --------------------------
-st.sidebar.header("User")
+st.sidebar.header("👤 User")
 user = st.sidebar.selectbox("Select User", ["Ronjone", "CSM 1", "CSM 2"])
 
 # --------------------------
-# 🚨 WAR ROOM MODE
+# 🚨 WAR ROOM
 # --------------------------
-war_room = st.sidebar.checkbox("🚨 War Room Mode (Critical Only)")
+war_room = st.sidebar.checkbox("🚨 War Room Mode")
 
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
 
-    # --------------------------
-    # 🧹 Clean columns
-    # --------------------------
+    # Clean columns
     df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_").str.replace("(", "").str.replace(")", "").str.replace("-", "_")
 
     # --------------------------
-    # 🧠 Scoring
+    # 🧠 SCORING
     # --------------------------
     df['raw_score'] = (
         df['sentiment_score_1_10'] +
@@ -53,51 +52,100 @@ if uploaded_file:
         labels=["Critical", "High", "Medium", "Low"]
     )
 
-    df['churn_risk'] = df['priority'].map({
-        "Critical": "High",
-        "High": "Medium",
-        "Medium": "Low",
-        "Low": "Low"
-    })
+    # --------------------------
+    # 📊 SMART METRICS
+    # --------------------------
+    arr_column = next((c for c in df.columns if "arr" in c and "risk" not in c), None)
+    renewal_column = next((c for c in df.columns if "renewal" in c), None)
 
-    def get_risk_type(row):
-        if row['usage_score_1_10'] < 4:
-            return "Usage"
-        elif row['support_score_1_10'] < 4:
-            return "Support"
-        elif row['sentiment_score_1_10'] < 4:
-            return "Sentiment"
-        else:
-            return "Engagement"
+    total_customers = len(df)
+    critical_count = (df['priority'] == "Critical").sum()
+    high_count = (df['priority'] == "High").sum()
 
-    df['risk_type'] = df.apply(get_risk_type, axis=1)
+    percent_critical = round((critical_count / total_customers) * 100, 1)
 
-    def get_action(priority):
-        if priority == "Critical":
-            return "🚨 Immediate escalation + exec call"
-        elif priority == "High":
-            return "⚠️ Schedule intervention within 7 days"
-        elif priority == "Medium":
-            return "📈 Drive feature adoption"
-        else:
-            return "💰 Expansion opportunity"
+    if arr_column:
+        arr_at_risk = df[df['priority'].isin(["Critical", "High"])][arr_column].sum()
+        total_arr = df[arr_column].sum()
+    else:
+        arr_at_risk = 0
+        total_arr = 0
 
-    df['recommended_action'] = df['priority'].apply(get_action)
-    df['heal_desk'] = df['priority'].apply(lambda x: "Yes" if x == "Critical" else "No")
+    if renewal_column:
+        urgent_renewals = (df[renewal_column] < 90).sum()
+    else:
+        urgent_renewals = 0
+
+    avg_sentiment = round(df['sentiment_score_1_10'].mean(), 2)
 
     # --------------------------
-    # 📊 METRICS
+    # 🧠 EXECUTIVE SUMMARY (RULE-BASED)
+    # --------------------------
+    st.subheader("🧠 Executive Summary")
+
+    summary = []
+
+    if percent_critical > 25:
+        summary.append("🚨 High portfolio risk: Significant % of accounts are critical.")
+    elif percent_critical > 10:
+        summary.append("⚠️ Moderate risk: Some accounts require attention.")
+    else:
+        summary.append("✅ Portfolio is largely healthy.")
+
+    if arr_at_risk > 0:
+        summary.append(f"💰 ${arr_at_risk:,.0f} ARR is currently at risk.")
+
+    if urgent_renewals > 0:
+        summary.append(f"⏳ {urgent_renewals} renewals coming up within 90 days.")
+
+    if avg_sentiment < 5:
+        summary.append("📉 Customer sentiment is trending low — risk of churn increasing.")
+    else:
+        summary.append("📈 Customer sentiment is stable.")
+
+    for line in summary:
+        st.write(f"- {line}")
+
+    # --------------------------
+    # 📊 PORTFOLIO OVERVIEW
     # --------------------------
     st.subheader("📊 Portfolio Overview")
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("🚨 Critical", (df['priority'] == "Critical").sum())
-    col2.metric("⚠️ High", (df['priority'] == "High").sum())
+    col1, col2, col3, col4, col5 = st.columns(5)
+
+    col1.metric("🚨 Critical", critical_count)
+    col2.metric("⚠️ High", high_count)
     col3.metric("🟡 Medium", (df['priority'] == "Medium").sum())
     col4.metric("🟢 Low", (df['priority'] == "Low").sum())
+    col5.metric("% Critical", f"{percent_critical}%")
 
     # --------------------------
-    # 🎛 FILTER + WAR ROOM
+    # 💰 BUSINESS METRICS
+    # --------------------------
+    st.subheader("💰 Business Risk")
+
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric("ARR at Risk", f"${arr_at_risk:,.0f}")
+    col2.metric("Total ARR", f"${total_arr:,.0f}")
+    col3.metric("Renewals < 90 Days", urgent_renewals)
+
+    # --------------------------
+    # 🚨 WHAT NEEDS ATTENTION
+    # --------------------------
+    st.subheader("🚨 What Needs Attention Today")
+
+    critical_df = df[df['priority'] == "Critical"]
+
+    if not critical_df.empty:
+        st.error(f"{len(critical_df)} Critical accounts need immediate action")
+        st.dataframe(critical_df[['client_name', 'health_score']])
+
+    if urgent_renewals > 0:
+        st.warning(f"{urgent_renewals} accounts have renewals in < 90 days")
+
+    # --------------------------
+    # 🎛 FILTER
     # --------------------------
     st.sidebar.header("Filters")
 
@@ -113,35 +161,15 @@ if uploaded_file:
     else:
         filtered_df = df
 
-    # Sort worst first
     filtered_df = filtered_df.sort_values(by="health_score")
 
-    # --------------------------
-    # 🚨 WAR ROOM ALERT
-    # --------------------------
     if war_room:
-        st.error("🚨 WAR ROOM MODE ACTIVE: Showing Critical Accounts Only")
+        st.error("🚨 WAR ROOM MODE ACTIVE")
 
     # --------------------------
-    # 📌 MY TASKS
+    # 📋 CLIENT TABLE
     # --------------------------
-    st.sidebar.subheader("📌 My Tasks")
-
-    if not actions_df.empty and 'user' in actions_df.columns:
-        my_tasks = actions_df[
-            (actions_df['user'] == user) &
-            (actions_df['status'] != "Completed")
-        ]
-
-        if not my_tasks.empty:
-            st.sidebar.write(my_tasks[['client_name', 'status']])
-        else:
-            st.sidebar.write("No pending tasks 🎉")
-
-    # --------------------------
-    # 📋 TABLE
-    # --------------------------
-    st.subheader("📋 Client List")
+    st.subheader("📋 Client Portfolio")
     st.dataframe(filtered_df, use_container_width=True)
 
     # --------------------------
@@ -157,14 +185,11 @@ if uploaded_file:
     with col1:
         st.metric("Health Score", client_data['health_score'])
         st.metric("Priority", client_data['priority'])
-        st.metric("Churn Risk", client_data['churn_risk'])
+        st.metric("Churn Risk", client_data['priority'])
 
     with col2:
-        st.metric("Risk Type", client_data['risk_type'])
-        st.metric("Heal Desk", client_data['heal_desk'])
-
-    st.subheader("🧠 Recommended Action")
-    st.info(client_data['recommended_action'])
+        st.metric("Sentiment", client_data['sentiment_score_1_10'])
+        st.metric("Usage", client_data['usage_score_1_10'])
 
     # --------------------------
     # ✍️ ACTION TRACKING
@@ -199,4 +224,4 @@ if uploaded_file:
 
         actions_df.to_csv("actions.csv", index=False)
 
-        st.success(f"Saved for {client_name} ✅")
+        st.success("Saved ✅")
