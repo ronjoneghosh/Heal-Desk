@@ -1,3 +1,5 @@
+from scoring import calculate_usage_score, calculate_support_score, calculate_chs, calculate_cs_score  # ✅ ADDED
+
 import streamlit as st
 import pandas as pd
 import os
@@ -7,6 +9,14 @@ st.set_page_config(layout="wide")
 
 st.title("🚀 CX Health Command Center")
 st.caption("Customer Success Intelligence Platform")
+
+# --------------------------
+# 🔥 DATA MODE
+# --------------------------
+data_mode = st.radio(
+    "Select Data Type",
+    ["Pre-Scored Data (existing)", "Raw Data (auto-generate scores)"]
+)
 
 uploaded_file = st.file_uploader("Upload your client CSV", type=["csv"])
 
@@ -32,11 +42,52 @@ war_room = st.sidebar.checkbox("🚨 War Room Mode")
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
 
-    # Clean columns
+    # --------------------------
+    # CLEAN COLUMNS
+    # --------------------------
     df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_").str.replace("(", "").str.replace(")", "").str.replace("-", "_")
 
     # --------------------------
-    # 🧠 SCORING
+    # 🧠 RAW MODE SCORING
+    # --------------------------
+    if data_mode == "Raw Data (auto-generate scores)":
+        st.info("⚙️ Generating scores from raw data...")
+
+        df = calculate_usage_score(df)
+        df = calculate_support_score(df)
+        df = calculate_chs(df)
+
+        # --------------------------
+        # 🧠 ADD CS SCORE (NEW)
+        # --------------------------
+        df = calculate_cs_score(df)
+
+        # --------------------------
+        # 🧠 FIX SENTIMENT → USE CS SCORE
+        # --------------------------
+        df['sentiment_score_1_10'] = df.get('cs_score_1_10', 5)
+
+        # --------------------------
+        # 🧠 FIX ENGAGEMENT (MISSING COLUMN)
+        # --------------------------
+        df['engagement_score_1_10'] = (
+            (df.get('interactions', 0) * 0.4) +
+            (df.get('posts_created', 0) * 0.3) +
+            (df.get('active_hours', 0) * 0.3)
+        )
+
+        if df['engagement_score_1_10'].max() != 0:
+            df['engagement_score_1_10'] = (
+                df['engagement_score_1_10'] / df['engagement_score_1_10'].max()
+            ) * 10
+
+        df['engagement_score_1_10'] = df['engagement_score_1_10'].clip(1, 10)
+
+    else:
+        st.info("📂 Using pre-scored data")
+
+    # --------------------------
+    # 🧠 FINAL HEALTH
     # --------------------------
     df['raw_score'] = (
         df['sentiment_score_1_10'] +
@@ -122,17 +173,15 @@ if uploaded_file:
     col3.metric("Renewals < 90 Days", urgent_renewals)
 
     # --------------------------
-    # 📊 CHARTS (FIXED ONLY)
+    # 📊 CHARTS
     # --------------------------
     st.subheader("📊 Visual Dashboard")
 
-    # Dropdown for chart data
     chart_mode = st.selectbox(
         "View Charts Based On:",
         ["All Customers", "Filtered Customers"]
     )
 
-    # Filter logic reused
     if war_room:
         filtered_df = df[df['priority'] == "Critical"]
     else:
@@ -140,53 +189,35 @@ if uploaded_file:
 
     chart_df = df if chart_mode == "All Customers" else filtered_df
 
-    # 3 aligned charts
     col1, col2, col3 = st.columns(3)
 
-    # Priority Distribution
     with col1:
         st.write("### Priority Distribution")
-
         fig, ax = plt.subplots(figsize=(4,3))
         chart_df['priority'].value_counts().plot(kind='bar', ax=ax)
-
         ax.set_xlabel("Priority Level")
         ax.set_ylabel("Number of Customers")
-        ax.set_title("Customer Count")
-
         st.pyplot(fig)
-        st.caption("Y = customers | X = priority category")
 
-    # ARR by Priority
     with col2:
         if arr_column:
             st.write("### ARR by Priority")
-
             fig, ax = plt.subplots(figsize=(4,3))
             chart_df.groupby('priority')[arr_column].sum().plot(kind='bar', ax=ax)
-
             ax.set_xlabel("Priority Level")
             ax.set_ylabel("Total ARR ($)")
-
             ax.get_yaxis().set_major_formatter(
                 plt.FuncFormatter(lambda x, _: f'${int(x):,}')
             )
-
             st.pyplot(fig)
-            st.caption("Y = revenue ($) | X = priority")
 
-    # Health Score Distribution
     with col3:
         st.write("### Health Score Distribution")
-
         fig, ax = plt.subplots(figsize=(4,3))
         chart_df['health_score'].hist(ax=ax, bins=8)
-
         ax.set_xlabel("Health Score (1–10)")
         ax.set_ylabel("Number of Customers")
-
         st.pyplot(fig)
-        st.caption("Distribution of customer health scores")
 
     # --------------------------
     # 🚨 ATTENTION
